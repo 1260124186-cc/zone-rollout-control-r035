@@ -16,7 +16,10 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /v1/plans/{id}/complete", s.completePlan)
 
 	mux.HandleFunc("PATCH /v1/plans/{id}/leases", s.allocateLeases)
+	mux.HandleFunc("GET /v1/leases/{id}", s.getLease)
+	mux.HandleFunc("GET /v1/leases/{id}/renewals", s.listLeaseRenewals)
 	mux.HandleFunc("PATCH /v1/leases/{id}/release", s.releaseLease)
+	mux.HandleFunc("PATCH /v1/leases/{id}/renew", s.renewLease)
 	mux.HandleFunc("PATCH /v1/leases/{id}/probes", s.submitProbe)
 
 	mux.HandleFunc("PATCH /v1/plans/{id}/assessments", s.assessPlan)

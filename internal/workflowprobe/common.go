@@ -89,3 +89,34 @@ func submitProbe(
 	}, &result)
 	return result, err
 }
+
+type renewalResult struct {
+	Lease   domain.NodeLease    `json:"lease"`
+	Renewal domain.LeaseRenewal `json:"renewal"`
+}
+
+func renewLease(
+	harness *harness,
+	leaseID string,
+	requestKey string,
+	extensionSeconds int,
+) (renewalResult, error) {
+	var result renewalResult
+	err := harness.call(http.MethodPatch, "/v1/leases/"+leaseID+"/renew", domain.LeaseRenewalInput{
+		RequestKey:       requestKey,
+		ExtensionSeconds: extensionSeconds,
+	}, &result)
+	return result, err
+}
+
+func getLease(harness *harness, leaseID string) (domain.NodeLease, error) {
+	var lease domain.NodeLease
+	err := harness.call(http.MethodGet, "/v1/leases/"+leaseID, nil, &lease)
+	return lease, err
+}
+
+func listRenewals(harness *harness, leaseID string) ([]domain.LeaseRenewal, error) {
+	var renewals []domain.LeaseRenewal
+	err := harness.call(http.MethodGet, "/v1/leases/"+leaseID+"/renewals", nil, &renewals)
+	return renewals, err
+}

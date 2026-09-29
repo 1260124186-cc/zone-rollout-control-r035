@@ -53,6 +53,56 @@ func LeaseFingerprint(planID string, input LeaseInput) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// LeaseRenewalBasis is the stable reason code recorded on every renewal.
+const LeaseRenewalBasis = "lease_renewal_request"
+
+func LeaseRenewalFingerprint(leaseID string, input LeaseRenewalInput) string {
+	payload := fmt.Sprintf(
+		"%s|%s|%d",
+		leaseID,
+		input.RequestKey,
+		input.ExtensionSeconds,
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
+// LeaseTotalDeadline returns the server-side ceiling for a lease's expiry.
+// Leases created before the ceiling was recorded fall back to claimedAt plus
+// the configured maximum total duration.
+func LeaseTotalDeadline(lease NodeLease, maxTotalDuration time.Duration) time.Time {
+	if !lease.MaxExpiresAt.IsZero() {
+		return lease.MaxExpiresAt
+	}
+	return lease.ClaimedAt.Add(maxTotalDuration)
+}
+
+// CalculateLeaseRenewal decides the new expiry for a renewal request.
+// The server never extends a lease beyond its total deadline: a request that
+// would overshoot is clamped to the ceiling and reports clamped=true. A lease
+// already sitting at the ceiling is rejected with CodeLeaseRenewalLimit.
+func CalculateLeaseRenewal(
+	lease NodeLease,
+	input LeaseRenewalInput,
+	maxTotalDuration time.Duration,
+) (newExpiresAt time.Time, grantedSeconds int, clamped bool, err error) {
+	ceiling := LeaseTotalDeadline(lease, maxTotalDuration)
+	if !lease.ExpiresAt.Before(ceiling) {
+		return time.Time{}, 0, false, NewError(CodeLeaseRenewalLimit, "lease has reached its maximum total duration", map[string]any{
+			"lease_id":       lease.ID,
+			"expires_at":     lease.ExpiresAt,
+			"max_expires_at": ceiling,
+			"renewal_count":  lease.RenewalCount,
+		})
+	}
+	requested := lease.ExpiresAt.Add(time.Duration(input.ExtensionSeconds) * time.Second)
+	if !requested.Before(ceiling) {
+		granted := int(ceiling.Sub(lease.ExpiresAt).Seconds())
+		return ceiling, granted, true, nil
+	}
+	return requested, input.ExtensionSeconds, false, nil
+}
+
 func ProbeFingerprint(leaseID string, input ProbeInput) string {
 	payload := fmt.Sprintf(
 		"%s|%s|%t|%d|%d|%s",

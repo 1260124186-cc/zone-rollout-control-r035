@@ -31,13 +31,15 @@ func main() {
 
 func run() error {
 	var (
-		address        string
-		snapshotPath   string
-		shutdownWindow time.Duration
+		address               string
+		snapshotPath          string
+		shutdownWindow        time.Duration
+		maxLeaseTotalDuration time.Duration
 	)
 	flag.StringVar(&address, "addr", "127.0.0.1:8090", "HTTP listen address")
 	flag.StringVar(&snapshotPath, "state", "data/zrc-state.json", "state snapshot path")
 	flag.DurationVar(&shutdownWindow, "shutdown-timeout", 10*time.Second, "graceful shutdown window")
+	flag.DurationVar(&maxLeaseTotalDuration, "max-lease-total-duration", allocation.DefaultMaxLeaseTotalDuration, "server-side ceiling on a lease's total lifetime; non-positive restores the default")
 	flag.Parse()
 	if shutdownWindow <= 0 {
 		return errors.New("shutdown-timeout must be positive")
@@ -59,6 +61,7 @@ func run() error {
 	plans := plan.New(stateStore, clock, ids)
 	nodes := fleet.New(stateStore, clock, ids)
 	allocations := allocation.New(stateStore, clock, ids)
+	allocations.SetMaxLeaseTotalDuration(maxLeaseTotalDuration)
 	probes := probe.New(stateStore, clock, ids, allocations)
 	assessments := assessment.New(stateStore, clock, ids)
 	api := httpapi.New(plans, nodes, allocations, probes, assessments, ids, logger)

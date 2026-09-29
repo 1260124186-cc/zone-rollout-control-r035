@@ -219,6 +219,21 @@ func ValidateLeaseInput(input LeaseInput) error {
 	return nil
 }
 
+func ValidateLeaseRenewalInput(input LeaseRenewalInput) error {
+	input.RequestKey = strings.TrimSpace(input.RequestKey)
+	details := make(map[string]any)
+	if err := validateRequestKey(input.RequestKey); err != nil {
+		details["request_key"] = err.Error()
+	}
+	if input.ExtensionSeconds < 30 || input.ExtensionSeconds > 86400 {
+		details["extension_seconds"] = "must be between 30 and 86400"
+	}
+	if len(details) > 0 {
+		return Validation("lease renewal input is invalid", details)
+	}
+	return nil
+}
+
 func ValidateProbeInput(input ProbeInput, now time.Time) error {
 	input.RequestKey = strings.TrimSpace(input.RequestKey)
 	details := make(map[string]any)

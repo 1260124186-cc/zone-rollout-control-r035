@@ -23,15 +23,20 @@ import (
 )
 
 type harness struct {
-	baseURL  string
-	clock    *platform.ManualClock
-	client   *http.Client
-	server   *http.Server
-	listener net.Listener
-	tempDir  string
+	baseURL      string
+	clock        *platform.ManualClock
+	client       *http.Client
+	server       *http.Server
+	listener     net.Listener
+	tempDir      string
+	leaseCeiling time.Duration
 }
 
 func newHarness() (*harness, error) {
+	return newHarnessWithCeiling(0)
+}
+
+func newHarnessWithCeiling(ceiling time.Duration) (*harness, error) {
 	tempDir, err := os.MkdirTemp("", "zrc-probe-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary directory: %w", err)
@@ -47,6 +52,9 @@ func newHarness() (*harness, error) {
 	plans := plan.New(stateStore, clock, ids)
 	nodes := fleet.New(stateStore, clock, ids)
 	allocations := allocation.New(stateStore, clock, ids)
+	if ceiling > 0 {
+		allocations.SetMaxLeaseTotalDuration(ceiling)
+	}
 	probes := probe.New(stateStore, clock, ids, allocations)
 	assessments := assessment.New(stateStore, clock, ids)
 	api := httpapi.New(plans, nodes, allocations, probes, assessments, ids, logger)
@@ -61,12 +69,13 @@ func newHarness() (*harness, error) {
 		_ = server.Serve(listener)
 	}()
 	return &harness{
-		baseURL:  "http://" + listener.Addr().String(),
-		clock:    clock,
-		client:   &http.Client{Timeout: 10 * time.Second},
-		server:   server,
-		listener: listener,
-		tempDir:  tempDir,
+		baseURL:      "http://" + listener.Addr().String(),
+		clock:        clock,
+		client:       &http.Client{Timeout: 10 * time.Second},
+		server:       server,
+		listener:     listener,
+		tempDir:      tempDir,
+		leaseCeiling: ceiling,
 	}, nil
 }
 

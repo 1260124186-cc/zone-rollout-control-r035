@@ -84,15 +84,38 @@ type ResolverNode struct {
 }
 
 type NodeLease struct {
-	ID           string     `json:"id"`
-	PlanID       string     `json:"plan_id"`
-	NodeID       string     `json:"node_id"`
-	AllocationID string     `json:"allocation_id"`
-	State        LeaseState `json:"state"`
-	ClaimedAt    time.Time  `json:"claimed_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	ProbeID      string     `json:"probe_id,omitempty"`
+	ID            string     `json:"id"`
+	PlanID        string     `json:"plan_id"`
+	NodeID        string     `json:"node_id"`
+	AllocationID  string     `json:"allocation_id"`
+	State         LeaseState `json:"state"`
+	ClaimedAt     time.Time  `json:"claimed_at"`
+	ExpiresAt     time.Time  `json:"expires_at"`
+	MaxExpiresAt  time.Time  `json:"max_expires_at,omitempty"`
+	RenewalCount  int        `json:"renewal_count"`
+	LastRenewedAt *time.Time `json:"last_renewed_at,omitempty"`
+	FinishedAt    *time.Time `json:"finished_at,omitempty"`
+	ProbeID       string     `json:"probe_id,omitempty"`
+}
+
+type LeaseRenewalInput struct {
+	RequestKey       string `json:"request_key"`
+	ExtensionSeconds int    `json:"extension_seconds"`
+}
+
+type LeaseRenewal struct {
+	ID                 string    `json:"id"`
+	LeaseID            string    `json:"lease_id"`
+	PlanID             string    `json:"plan_id"`
+	NodeID             string    `json:"node_id"`
+	RequestKey         string    `json:"request_key"`
+	RequestFingerprint string    `json:"request_fingerprint"`
+	RenewalNumber      int       `json:"renewal_number"`
+	PreviousExpiresAt  time.Time `json:"previous_expires_at"`
+	NewExpiresAt       time.Time `json:"new_expires_at"`
+	ExtensionSeconds   int       `json:"extension_seconds"`
+	Basis              string    `json:"basis"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 type LeaseGroup struct {
@@ -143,18 +166,20 @@ type AuditEvent struct {
 }
 
 type State struct {
-	SchemaVersion         int                          `json:"schema_version"`
-	Revision              uint64                       `json:"revision"`
-	Plans                 map[string]RolloutPlan       `json:"plans"`
-	Revisions             map[string]ZoneRevision      `json:"revisions"`
-	Nodes                 map[string]ResolverNode      `json:"nodes"`
-	Leases                map[string]NodeLease         `json:"leases"`
-	LeaseGroups           map[string]LeaseGroup        `json:"lease_groups"`
-	Probes                map[string]Probe             `json:"probes"`
-	Assessments           map[string]RolloutAssessment `json:"assessments"`
-	LeaseRequestKeys      map[string]string            `json:"lease_request_keys"`
-	AssessmentRequestKeys map[string]string            `json:"assessment_request_keys"`
-	AuditEvents           []AuditEvent                 `json:"audit_events"`
+	SchemaVersion           int                          `json:"schema_version"`
+	Revision                uint64                       `json:"revision"`
+	Plans                   map[string]RolloutPlan       `json:"plans"`
+	Revisions               map[string]ZoneRevision      `json:"revisions"`
+	Nodes                   map[string]ResolverNode      `json:"nodes"`
+	Leases                  map[string]NodeLease         `json:"leases"`
+	LeaseGroups             map[string]LeaseGroup        `json:"lease_groups"`
+	Probes                  map[string]Probe             `json:"probes"`
+	Assessments             map[string]RolloutAssessment `json:"assessments"`
+	LeaseRequestKeys        map[string]string            `json:"lease_request_keys"`
+	LeaseRenewals           map[string]LeaseRenewal      `json:"lease_renewals"`
+	LeaseRenewalRequestKeys map[string]string            `json:"lease_renewal_request_keys"`
+	AssessmentRequestKeys   map[string]string            `json:"assessment_request_keys"`
+	AuditEvents             []AuditEvent                 `json:"audit_events"`
 }
 
 type PageMeta struct {
