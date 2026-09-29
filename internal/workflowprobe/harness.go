@@ -31,7 +31,15 @@ type harness struct {
 	tempDir  string
 }
 
-func newHarness() (*harness, error) {
+type harnessOption struct {
+	maxLeaseTotal time.Duration
+}
+
+func newHarness(options ...func(*harnessOption)) (*harness, error) {
+	config := harnessOption{maxLeaseTotal: allocation.DefaultMaxLeaseTotal}
+	for _, option := range options {
+		option(&config)
+	}
 	tempDir, err := os.MkdirTemp("", "zrc-probe-*")
 	if err != nil {
 		return nil, fmt.Errorf("create temporary directory: %w", err)
@@ -46,7 +54,7 @@ func newHarness() (*harness, error) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	plans := plan.New(stateStore, clock, ids)
 	nodes := fleet.New(stateStore, clock, ids)
-	allocations := allocation.New(stateStore, clock, ids)
+	allocations := allocation.New(stateStore, clock, ids, allocation.WithMaxLeaseTotal(config.maxLeaseTotal))
 	probes := probe.New(stateStore, clock, ids, allocations)
 	assessments := assessment.New(stateStore, clock, ids)
 	api := httpapi.New(plans, nodes, allocations, probes, assessments, ids, logger)

@@ -34,13 +34,18 @@ func run() error {
 		address        string
 		snapshotPath   string
 		shutdownWindow time.Duration
+		maxLeaseTotal  time.Duration
 	)
 	flag.StringVar(&address, "addr", "127.0.0.1:8090", "HTTP listen address")
 	flag.StringVar(&snapshotPath, "state", "data/zrc-state.json", "state snapshot path")
 	flag.DurationVar(&shutdownWindow, "shutdown-timeout", 10*time.Second, "graceful shutdown window")
+	flag.DurationVar(&maxLeaseTotal, "max-lease-total", allocation.DefaultMaxLeaseTotal, "maximum total duration of a lease including renewals")
 	flag.Parse()
 	if shutdownWindow <= 0 {
 		return errors.New("shutdown-timeout must be positive")
+	}
+	if maxLeaseTotal <= 0 {
+		return errors.New("max-lease-total must be positive")
 	}
 
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -58,7 +63,7 @@ func run() error {
 	ids := platform.CryptoIDGenerator{}
 	plans := plan.New(stateStore, clock, ids)
 	nodes := fleet.New(stateStore, clock, ids)
-	allocations := allocation.New(stateStore, clock, ids)
+	allocations := allocation.New(stateStore, clock, ids, allocation.WithMaxLeaseTotal(maxLeaseTotal))
 	probes := probe.New(stateStore, clock, ids, allocations)
 	assessments := assessment.New(stateStore, clock, ids)
 	api := httpapi.New(plans, nodes, allocations, probes, assessments, ids, logger)

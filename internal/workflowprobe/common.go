@@ -89,3 +89,39 @@ func submitProbe(
 	}, &result)
 	return result, err
 }
+
+func renewLease(
+	harness *harness,
+	leaseID string,
+	requestKey string,
+	seconds int,
+	basis string,
+) (domain.NodeLease, error) {
+	var lease domain.NodeLease
+	err := harness.call(http.MethodPatch, "/v1/leases/"+leaseID+"/renewals", domain.LeaseRenewalInput{
+		RequestKey:     requestKey,
+		RenewalSeconds: seconds,
+		Basis:          basis,
+	}, &lease)
+	return lease, err
+}
+
+// allocateLease is like allocate but lets the caller choose the initial lease
+// duration, which renewal scenarios need.
+func allocateLease(
+	harness *harness,
+	planID string,
+	requestKey string,
+	region string,
+	leaseSeconds int,
+	maxNodes int,
+) (domain.LeaseGroup, error) {
+	var group domain.LeaseGroup
+	err := harness.call(http.MethodPatch, "/v1/plans/"+planID+"/leases", domain.LeaseInput{
+		RequestKey:   requestKey,
+		Region:       region,
+		LeaseSeconds: leaseSeconds,
+		MaxNodes:     maxNodes,
+	}, &group)
+	return group, err
+}

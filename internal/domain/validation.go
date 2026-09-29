@@ -9,13 +9,16 @@ import (
 )
 
 const (
-	MaxZoneRunes       = 253
-	MaxAuthorityRunes  = 253
-	MaxNodeNameRunes   = 180
-	MaxRegionRunes     = 48
-	MinRequestKeyRunes = 8
-	MaxRequestKeyRunes = 64
-	MaxEntries         = 500
+	MaxZoneRunes         = 253
+	MaxAuthorityRunes    = 253
+	MaxNodeNameRunes     = 180
+	MaxRegionRunes       = 48
+	MinRequestKeyRunes   = 8
+	MaxRequestKeyRunes   = 64
+	MaxEntries           = 500
+	MaxRenewalBasisRunes = 200
+	MinLeaseSeconds      = 30
+	MaxLeaseSeconds      = 86400
 )
 
 type PlanCreateInput struct {
@@ -42,6 +45,12 @@ type LeaseInput struct {
 	Region       string `json:"region"`
 	LeaseSeconds int    `json:"lease_seconds"`
 	MaxNodes     int    `json:"max_nodes"`
+}
+
+type LeaseRenewalInput struct {
+	RequestKey     string `json:"request_key"`
+	RenewalSeconds int    `json:"renewal_seconds"`
+	Basis          string `json:"basis"`
 }
 
 type ProbeInput struct {
@@ -207,7 +216,7 @@ func ValidateLeaseInput(input LeaseInput) error {
 	if count := utf8.RuneCountInString(input.Region); count > MaxRegionRunes {
 		details["region"] = "must be at most 48 characters"
 	}
-	if input.LeaseSeconds < 30 || input.LeaseSeconds > 86400 {
+	if input.LeaseSeconds < MinLeaseSeconds || input.LeaseSeconds > MaxLeaseSeconds {
 		details["lease_seconds"] = "must be between 30 and 86400"
 	}
 	if input.MaxNodes < 1 || input.MaxNodes > 100 {
@@ -217,6 +226,25 @@ func ValidateLeaseInput(input LeaseInput) error {
 		return Validation("lease input is invalid", details)
 	}
 	return nil
+}
+
+func ValidateLeaseRenewalInput(input LeaseRenewalInput) (LeaseRenewalInput, error) {
+	input.RequestKey = strings.TrimSpace(input.RequestKey)
+	input.Basis = strings.TrimSpace(input.Basis)
+	details := make(map[string]any)
+	if err := validateRequestKey(input.RequestKey); err != nil {
+		details["request_key"] = err.Error()
+	}
+	if input.RenewalSeconds < MinLeaseSeconds || input.RenewalSeconds > MaxLeaseSeconds {
+		details["renewal_seconds"] = "must be between 30 and 86400"
+	}
+	if count := utf8.RuneCountInString(input.Basis); count > MaxRenewalBasisRunes {
+		details["basis"] = "must be at most 200 characters"
+	}
+	if len(details) > 0 {
+		return input, Validation("lease renewal input is invalid", details)
+	}
+	return input, nil
 }
 
 func ValidateProbeInput(input ProbeInput, now time.Time) error {

@@ -53,6 +53,53 @@ func LeaseFingerprint(planID string, input LeaseInput) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// LeaseRenewalFingerprint binds a renewal request to one lease and its exact
+// extension parameters, including the caller-supplied basis.
+func LeaseRenewalFingerprint(leaseID string, input LeaseRenewalInput) string {
+	payload := fmt.Sprintf(
+		"%s|%s|%d|%s",
+		leaseID,
+		input.RequestKey,
+		input.RenewalSeconds,
+		input.Basis,
+	)
+	sum := sha256.Sum256([]byte(payload))
+	return hex.EncodeToString(sum[:])
+}
+
+// ExpireLease moves a due claimed lease to expired and returns whether the
+// transition was applied. It never changes leases already in a final state.
+func ExpireLease(lease *NodeLease, now time.Time) bool {
+	if lease.State != LeaseClaimed || lease.ExpiresAt.After(now) {
+		return false
+	}
+	finishedAt := now.UTC()
+	lease.State = LeaseExpired
+	lease.FinishedAt = &finishedAt
+	return true
+}
+
+// RenewLease extends a claimed lease relative to its current deadline and
+// appends an immutable renewal record. It is a pure state transition: callers
+// are responsible for every precondition and the maximum-total-duration cap.
+func RenewLease(lease *NodeLease, input LeaseRenewalInput, now time.Time) LeaseRenewal {
+	previousExpiresAt := lease.ExpiresAt
+	newExpiresAt := previousExpiresAt.Add(time.Duration(input.RenewalSeconds) * time.Second)
+	renewal := LeaseRenewal{
+		Sequence:           lease.RenewalCount + 1,
+		RequestKey:         input.RequestKey,
+		RequestFingerprint: LeaseRenewalFingerprint(lease.ID, input),
+		Basis:              input.Basis,
+		PreviousExpiresAt:  previousExpiresAt,
+		ExpiresAt:          newExpiresAt,
+		RenewedAt:          now.UTC(),
+	}
+	lease.ExpiresAt = newExpiresAt
+	lease.RenewalCount++
+	lease.Renewals = append(lease.Renewals, renewal)
+	return renewal
+}
+
 func ProbeFingerprint(leaseID string, input ProbeInput) string {
 	payload := fmt.Sprintf(
 		"%s|%s|%t|%d|%d|%s",

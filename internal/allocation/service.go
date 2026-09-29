@@ -11,14 +11,40 @@ import (
 	"solo-0014-zone-rollout-control/internal/store"
 )
 
+// DefaultMaxLeaseTotal is the server-side cap on the total time a single
+// lease can cover from claim through every accepted renewal.
+const DefaultMaxLeaseTotal = 7 * 24 * time.Hour
+
 type Service struct {
-	store *store.Store
-	clock platform.Clock
-	ids   platform.IDGenerator
+	store         *store.Store
+	clock         platform.Clock
+	ids           platform.IDGenerator
+	maxLeaseTotal time.Duration
 }
 
-func New(stateStore *store.Store, clock platform.Clock, ids platform.IDGenerator) *Service {
-	return &Service{store: stateStore, clock: clock, ids: ids}
+// Option customizes an allocation service.
+type Option func(*Service)
+
+// WithMaxLeaseTotal overrides the server-side maximum total lease duration.
+func WithMaxLeaseTotal(value time.Duration) Option {
+	return func(service *Service) {
+		if value > 0 {
+			service.maxLeaseTotal = value
+		}
+	}
+}
+
+func New(stateStore *store.Store, clock platform.Clock, ids platform.IDGenerator, options ...Option) *Service {
+	service := &Service{
+		store:         stateStore,
+		clock:         clock,
+		ids:           ids,
+		maxLeaseTotal: DefaultMaxLeaseTotal,
+	}
+	for _, option := range options {
+		option(service)
+	}
+	return service
 }
 
 func (s *Service) Allocate(
@@ -28,6 +54,12 @@ func (s *Service) Allocate(
 ) (domain.LeaseGroup, error) {
 	if err := domain.ValidateLeaseInput(input); err != nil {
 		return domain.LeaseGroup{}, err
+	}
+	if int64(input.LeaseSeconds) > int64(s.maxLeaseTotal.Seconds()) {
+		return domain.LeaseGroup{}, domain.NewError(domain.CodeLeaseRenewalLimit, "lease duration exceeds the maximum total lease duration", map[string]any{
+			"lease_seconds": input.LeaseSeconds,
+			"maximum_total": int64(s.maxLeaseTotal.Seconds()),
+		})
 	}
 	input.Region = strings.TrimSpace(strings.ToLower(input.Region))
 	requestIndex := planID + "\x00" + input.RequestKey
@@ -129,6 +161,142 @@ func (s *Service) Allocate(
 	return group, err
 }
 
+// Renew extends an active claimed lease by request key before its deadline.
+// Renewal is idempotent on (lease, request_key), records every accepted
+// extension, and refuses to push the lease beyond the server-side total cap.
+func (s *Service) Renew(
+	ctx context.Context,
+	leaseID string,
+	input domain.LeaseRenewalInput,
+) (domain.NodeLease, error) {
+	input, err := domain.ValidateLeaseRenewalInput(input)
+	if err != nil {
+		return domain.NodeLease{}, err
+	}
+	requestIndex := leaseID + "\x00" + input.RequestKey
+	fingerprint := domain.LeaseRenewalFingerprint(leaseID, input)
+	now := s.clock.Now().UTC()
+	var result domain.NodeLease
+
+	err = s.store.Write(ctx, func(state *domain.State) error {
+		if replayedID, exists := state.LeaseRenewalKeys[requestIndex]; exists {
+			replayed, found := state.Leases[replayedID]
+			if !found || replayedID != leaseID {
+				return domain.NewError(domain.CodeStorageFailure, "lease renewal index is inconsistent", map[string]any{
+					"lease_id": leaseID,
+				})
+			}
+			matched := -1
+			for index := range replayed.Renewals {
+				if replayed.Renewals[index].RequestKey == input.RequestKey {
+					matched = index
+					break
+				}
+			}
+			if matched < 0 {
+				return domain.NewError(domain.CodeStorageFailure, "lease renewal index is inconsistent", map[string]any{
+					"lease_id": leaseID,
+				})
+			}
+			if replayed.Renewals[matched].RequestFingerprint != fingerprint {
+				return domain.NewError(domain.CodeIdempotencyConflict, "request key was reused with different renewal parameters", map[string]any{
+					"lease_id":    leaseID,
+					"request_key": input.RequestKey,
+				})
+			}
+			result = replayed
+			return nil
+		}
+
+		// Sweep due leases inside the same lock so a concurrent expiry and a
+		// concurrent re-allocation can never race the renewal decision.
+		expireLeases(state, now)
+
+		lease, ok := state.Leases[leaseID]
+		if !ok {
+			return domain.NotFound("lease", leaseID)
+		}
+		switch lease.State {
+		case domain.LeaseExpired:
+			return domain.NewError(domain.CodeLeaseExpired, "lease has expired and cannot be renewed", map[string]any{
+				"lease_id":   leaseID,
+				"expires_at": lease.ExpiresAt,
+			})
+		case domain.LeaseReleased:
+			return domain.NewError(domain.CodeLeaseNotClaimed, "lease has been released and cannot be renewed", map[string]any{
+				"lease_id": leaseID,
+				"state":    lease.State,
+			})
+		case domain.LeaseReported:
+			return domain.NewError(domain.CodeLeaseNotClaimed, "lease has already reported and cannot be renewed", map[string]any{
+				"lease_id": leaseID,
+				"state":    lease.State,
+			})
+		case domain.LeaseClaimed:
+		default:
+			return domain.InvalidState("lease cannot be renewed from its current state", map[string]any{
+				"lease_id": leaseID,
+				"state":    lease.State,
+			})
+		}
+		if !now.Before(lease.ExpiresAt) {
+			return domain.NewError(domain.CodeLeaseExpired, "lease has expired and cannot be renewed", map[string]any{
+				"lease_id":   leaseID,
+				"expires_at": lease.ExpiresAt,
+			})
+		}
+		plan, ok := state.Plans[lease.PlanID]
+		if !ok {
+			return domain.NewError(domain.CodeStorageFailure, "lease references a missing plan", map[string]any{
+				"plan_id": lease.PlanID,
+			})
+		}
+		if plan.State != domain.PlanActive {
+			return domain.InvalidState("plan must be active to renew a lease", map[string]any{
+				"plan_id": lease.PlanID,
+				"state":   plan.State,
+			})
+		}
+		node, ok := state.Nodes[lease.NodeID]
+		if !ok {
+			return domain.NewError(domain.CodeStorageFailure, "lease references a missing node", map[string]any{
+				"node_id": lease.NodeID,
+			})
+		}
+		if node.State != domain.NodeLeased {
+			return domain.InvalidState("node is no longer held by this lease", map[string]any{
+				"node_id": lease.NodeID,
+				"state":   node.State,
+			})
+		}
+
+		newExpiresAt := lease.ExpiresAt.Add(time.Duration(input.RenewalSeconds) * time.Second)
+		if total := newExpiresAt.Sub(lease.ClaimedAt); total > s.maxLeaseTotal {
+			return domain.NewError(domain.CodeLeaseRenewalLimit, "renewal would exceed the maximum total lease duration", map[string]any{
+				"lease_id":             leaseID,
+				"requested_expires_at": newExpiresAt,
+				"maximum_total":        int64(s.maxLeaseTotal.Seconds()),
+				"remaining_seconds":    int64((lease.ClaimedAt.Add(s.maxLeaseTotal).Sub(lease.ExpiresAt)).Seconds()),
+			})
+		}
+
+		renewal := domain.RenewLease(&lease, input, now)
+		state.Leases[leaseID] = lease
+		state.LeaseRenewalKeys[requestIndex] = leaseID
+		store.AddAudit(state, s.ids, "lease", leaseID, "renewed", now, map[string]any{
+			"plan_id":             lease.PlanID,
+			"renewal_sequence":    renewal.Sequence,
+			"previous_expires_at": renewal.PreviousExpiresAt,
+			"expires_at":          renewal.ExpiresAt,
+			"request_key":         renewal.RequestKey,
+			"basis":               renewal.Basis,
+		})
+		result = lease
+		return nil
+	})
+	return result, err
+}
+
 func (s *Service) Release(ctx context.Context, leaseID string) (domain.NodeLease, error) {
 	now := s.clock.Now().UTC()
 	var result domain.NodeLease
@@ -183,12 +351,10 @@ func (s *Service) ExpireDue(ctx context.Context) (int, error) {
 func expireLeases(state *domain.State, now time.Time) int {
 	count := 0
 	for leaseID, lease := range state.Leases {
-		if lease.State != domain.LeaseClaimed || lease.ExpiresAt.After(now) {
+		transitioned := domain.ExpireLease(&lease, now)
+		if !transitioned {
 			continue
 		}
-		finishedAt := now
-		lease.State = domain.LeaseExpired
-		lease.FinishedAt = &finishedAt
 		state.Leases[leaseID] = lease
 		if node, ok := state.Nodes[lease.NodeID]; ok && node.State == domain.NodeLeased {
 			node.State = domain.NodeReady

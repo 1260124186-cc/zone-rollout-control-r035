@@ -84,15 +84,28 @@ type ResolverNode struct {
 }
 
 type NodeLease struct {
-	ID           string     `json:"id"`
-	PlanID       string     `json:"plan_id"`
-	NodeID       string     `json:"node_id"`
-	AllocationID string     `json:"allocation_id"`
-	State        LeaseState `json:"state"`
-	ClaimedAt    time.Time  `json:"claimed_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	ProbeID      string     `json:"probe_id,omitempty"`
+	ID           string         `json:"id"`
+	PlanID       string         `json:"plan_id"`
+	NodeID       string         `json:"node_id"`
+	AllocationID string         `json:"allocation_id"`
+	State        LeaseState     `json:"state"`
+	ClaimedAt    time.Time      `json:"claimed_at"`
+	ExpiresAt    time.Time      `json:"expires_at"`
+	FinishedAt   *time.Time     `json:"finished_at,omitempty"`
+	ProbeID      string         `json:"probe_id,omitempty"`
+	RenewalCount int            `json:"renewal_count"`
+	Renewals     []LeaseRenewal `json:"renewals,omitempty"`
+}
+
+// LeaseRenewal is the immutable record of one accepted lease extension.
+type LeaseRenewal struct {
+	Sequence           int       `json:"sequence"`
+	RequestKey         string    `json:"request_key"`
+	RequestFingerprint string    `json:"request_fingerprint"`
+	Basis              string    `json:"basis,omitempty"`
+	PreviousExpiresAt  time.Time `json:"previous_expires_at"`
+	ExpiresAt          time.Time `json:"expires_at"`
+	RenewedAt          time.Time `json:"renewed_at"`
 }
 
 type LeaseGroup struct {
@@ -153,6 +166,7 @@ type State struct {
 	Probes                map[string]Probe             `json:"probes"`
 	Assessments           map[string]RolloutAssessment `json:"assessments"`
 	LeaseRequestKeys      map[string]string            `json:"lease_request_keys"`
+	LeaseRenewalKeys      map[string]string            `json:"lease_renewal_keys"`
 	AssessmentRequestKeys map[string]string            `json:"assessment_request_keys"`
 	AuditEvents           []AuditEvent                 `json:"audit_events"`
 }

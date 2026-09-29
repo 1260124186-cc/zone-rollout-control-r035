@@ -29,6 +29,7 @@ go run ./cmd/zrc \
 - `--addr`：HTTP 监听地址，默认 `127.0.0.1:8090`。
 - `--state`：JSON 状态快照路径，默认 `data/zrc-state.json`。
 - `--shutdown-timeout`：中断后的关闭窗口，默认 `10s`。
+- `--max-lease-total`：单个租约自领取起（含全部续约）允许的最大总时长，默认 `168h`。
 
 服务会锁定 `<state>.lock`，避免两个进程同时修改同一份状态。每次成功事务先复制状态，再通过同目录临时文件和原子替换写入快照。
 
@@ -113,6 +114,18 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/leases \
   }'
 ```
 
+续约活动租约（在当前截止时间基础上延长）：
+
+```bash
+curl -sS -X PATCH http://127.0.0.1:8090/v1/leases/<lease_id>/renewals \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "request_key": "renew-request-0001",
+    "renewal_seconds": 300,
+    "basis": "probe is still running"
+  }'
+```
+
 提交探针：
 
 ```bash
@@ -174,6 +187,7 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 | `PATCH` | `/v1/plans/{id}/activate` | 激活计划 |
 | `PATCH` | `/v1/plans/{id}/complete` | 完成计划 |
 | `PATCH` | `/v1/plans/{id}/leases` | 给节点分配租约 |
+| `PATCH` | `/v1/leases/{id}/renewals` | 在截止前延长活动租约 |
 | `PATCH` | `/v1/leases/{id}/release` | 提前释放租约 |
 | `PATCH` | `/v1/leases/{id}/probes` | 登记探针并完成租约 |
 | `PATCH` | `/v1/plans/{id}/assessments` | 创建一致性判定 |
@@ -186,6 +200,8 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 - A、AAAA、CNAME 条目在写入前规范化并稳定排序，重复条目直接拒绝。
 - 节点按 `ready -> leased -> ready` 变化，隔离节点不会被选中。
 - 一个节点同一时刻最多有一个 `claimed` 租约。
+- 活动租约可在截止前按请求键续约：续约从当前截止时间顺延，并记录续约次数、上一截止时间和依据；服务端通过最大总时长（自领取起）封顶，超出返回 `lease_renewal_limit`。
+- 只有未到期的 `claimed` 租约可以续约；过期、已释放、已上报或计划非活动时一律拒绝，到期判定与租约读取在同一锁内完成。
 - 相同请求键和相同内容可安全重放；同键异载荷返回 `idempotency_conflict`。
 - 一致性判定综合节点覆盖率、序列号、成功比例和最大延迟，返回 `consistent` 或 `review_required`。
 - 所有校验和冲突在快照替换前返回，不留下部分状态。
@@ -198,8 +214,8 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 2. DNS 名称规范化、IP 校验、条目去重和稳定排序。
 3. 序列号递增与重复版本拒绝。
 4. 节点隔离、区域筛选、稳定选择和唯一租约。
-5. 租约期限、释放、过期清理和重复释放。
-6. 租约请求键与请求指纹重放。
+5. 租约期限、续约、释放、过期清理和重复释放。
+6. 租约分配与续约的请求键、请求指纹重放和最大总时长封顶。
 7. 探针请求键、载荷指纹、租约完成原子性和冲突检测。
 8. 成功率、节点覆盖、序列号一致性和延迟上限计算。
 9. 原子快照替换、文件锁、进程关闭和并发事务串行化。
@@ -214,6 +230,7 @@ curl -sS -X PATCH http://127.0.0.1:8090/v1/plans/<plan_id>/assessments \
 ```bash
 go run ./cmd/workflowprobe plan-revision-lifecycle
 go run ./cmd/workflowprobe node-lease-allocation
+go run ./cmd/workflowprobe lease-renewal
 go run ./cmd/workflowprobe probe-ingestion
 go run ./cmd/workflowprobe consistency-assessment
 ```

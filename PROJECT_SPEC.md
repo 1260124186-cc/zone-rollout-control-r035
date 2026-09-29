@@ -56,6 +56,19 @@ Zone Rollout Control 是面向 DNS 运维人员的 Go HTTP 控制面。它把区
 - `state`：`claimed`、`reported`、`released` 或 `expired`。
 - `claimed_at`、`expires_at`、`finished_at`。
 - `probe_id`：成功登记探针后的结果标识。
+- `renewal_count`：已接受的续约次数。
+- `renewals`：每次续约的不可变记录，包含 `sequence`、`request_key`、`request_fingerprint`、`basis`、`previous_expires_at`、`expires_at` 和 `renewed_at`。
+
+### LeaseRenewal
+
+活动租约在截止前的一次受控延长。
+
+- 续约从当前 `expires_at` 起追加 `renewal_seconds`，不改变 `claimed_at`。
+- 每次接受的续约记录续约次数、上一截止时间、请求键、请求指纹和调用方提供的 `basis`。
+- 服务端通过最大总时长（自 `claimed_at` 起，含全部续约）限制占用；超出返回 `lease_renewal_limit`。
+- 同租约同请求键同内容重放返回续约后的同一租约，不重复延长；同键异载荷返回 `idempotency_conflict`。
+- 只有截止时间未到的 `claimed` 租约可以续约；`expired`、`released`、`reported` 以及非活动计划的租约一律拒绝。
+- 续约、到期清理、释放、探针登记和重新分配在同一把状态锁内串行判定，一个节点同一时刻最多存在一个有效租约。
 
 ### LeaseGroup
 
@@ -179,6 +192,22 @@ ready --lease--> leased --report--> ready
 
 失败行为：计划非活动、无可用节点、请求键同键异载荷或保存失败时不会产生部分租约。
 
+### W2b 租约受控续约
+
+入口：`PATCH /v1/leases/{id}/renewals`。
+
+步骤：
+
+1. 入口校验请求键、续约秒数和续约依据。
+2. 分配服务在同一事务内清理已到期租约，再读取目标租约。
+3. 仅当租约为截止时间未到的 `claimed` 且计划仍为 `active` 时允许续约。
+4. 校验新截止时间（当前截止加续约秒数）不超过服务端最大总时长。
+5. 追加不可变续约记录、写入请求键幂等索引并原子替换快照。
+
+成功行为：活动租约在截止前按请求键延长，返回包含续约次数、上一截止时间和依据的租约；同键同内容安全重放。
+
+失败行为：过期、已释放、已上报、计划非活动、超过最大总时长或同键异载荷时不修改状态；并发续约和节点重新分配不会产生两个有效租约。
+
 ### W3 探针登记
 
 入口：`PATCH /v1/leases/{id}/probes`。
@@ -256,6 +285,7 @@ ready --lease--> leased --report--> ready
 - `PATCH /v1/plans/{id}/activate`
 - `PATCH /v1/plans/{id}/complete`
 - `PATCH /v1/plans/{id}/leases`
+- `PATCH /v1/leases/{id}/renewals`
 - `PATCH /v1/leases/{id}/release`
 - `PATCH /v1/leases/{id}/probes`
 - `PATCH /v1/plans/{id}/assessments`
@@ -280,7 +310,8 @@ ready --lease--> leased --report--> ready
 
 1. 计划创建、版本追加、激活、完成和非法重复迁移。
 2. 节点分配、租约唯一性、幂等重放和无可用节点冲突。
-3. 探针首写、同键重放、同键异载荷冲突和释放冲突。
-4. 一致性通过、审核触发、最新结果查询和幂等重放。
+3. 租约受控续约、同键重放、同键异载荷冲突、过期/已释放/已上报/计划完成拒绝、最大总时长上限和并发续约。
+4. 探针首写、同键重放、同键异载荷冲突和释放冲突。
+5. 一致性通过、审核触发、最新结果查询和幂等重放。
 
 每条探针使用独立临时目录，不访问外部网络，结束后关闭服务。

@@ -64,6 +64,18 @@ func (s *Service) Submit(
 			result = existing
 			return nil
 		}
+		// Apply the deadline in the same lock that reads the lease so a
+		// concurrent expiry sweep, renewal, or node re-allocation cannot make
+		// the expiry verdict disagree with the lease that is being reported.
+		if domain.ExpireLease(&lease, now) {
+			state.Leases[leaseID] = lease
+			if node, ok := state.Nodes[lease.NodeID]; ok && node.State == domain.NodeLeased {
+				node.State = domain.NodeReady
+				node.Version++
+				node.UpdatedAt = now
+				state.Nodes[node.ID] = node
+			}
+		}
 		if lease.State != domain.LeaseClaimed {
 			return domain.NewError(domain.CodeLeaseNotClaimed, "lease is not claimed", map[string]any{
 				"lease_id": leaseID,
